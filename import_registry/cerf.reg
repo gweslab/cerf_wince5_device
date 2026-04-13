@@ -5,3 +5,46 @@ REGEDIT4
 ; Always applied — there is no CLI switch to skip this file.
 ; Contents belong to CERF infrastructure (e.g. NDIS miniport registration).
 ; Do NOT use for appearance/UX tweaks — custom.reg is for those.
+
+; ---------------------------------------------------------------
+; Neutralize baked-in NDIS miniport entries.
+;
+; ndis.dll's NDS_Init calls CeDeviceEnumerateFromRegistry(L"Comm",
+; L"NDIS", ...) at boot. It walks HKLM\Comm\* and, for any subkey with
+; Group="NDIS", calls LoadDriver(ImagePath). Several of the ROM-baked
+; drivers (ne2000.dll in particular) ARE present in the VFS, so the
+; load would succeed and the driver would then try to probe ISA/PCI
+; hardware that doesn't exist — hang/crash risk.
+;
+; Our NdisMiniportService registers CERFMP1 directly from native code
+; after ndis.dll's Init returns; no need for any of these registry
+; entries. Delete them recursively (including Parms/Linkage children).
+; ---------------------------------------------------------------
+
+[-HKEY_LOCAL_MACHINE\Comm\USB8023]
+[-HKEY_LOCAL_MACHINE\Comm\USB80231]
+[-HKEY_LOCAL_MACHINE\Comm\NE2000]
+[-HKEY_LOCAL_MACHINE\Comm\NE20001]
+[-HKEY_LOCAL_MACHINE\Comm\VMini]
+[-HKEY_LOCAL_MACHINE\Comm\VMINI1]
+[-HKEY_LOCAL_MACHINE\Comm\RTL8139]
+[-HKEY_LOCAL_MACHINE\Comm\e100bex]
+[-HKEY_LOCAL_MACHINE\Comm\DP83815]
+[-HKEY_LOCAL_MACHINE\Comm\MBridge]
+[-HKEY_LOCAL_MACHINE\Comm\MBridge1]
+[-HKEY_LOCAL_MACHINE\Comm\AsyncMac]
+[-HKEY_LOCAL_MACHINE\Comm\AsyncMac1]
+
+; ---------------------------------------------------------------
+; Protocol linkage: bind Tcpip / Tcpip6 to CERFMP1.
+;
+; NDIS walks Linkage\Bind when tcpstk calls NdisRegisterProtocol to
+; decide which registered miniports each protocol should bind to. Our
+; adapter's instance name is CERFMP1 (set by NdisMiniportService).
+; ---------------------------------------------------------------
+
+[HKEY_LOCAL_MACHINE\Comm\Tcpip\Linkage]
+"Bind"=multi_sz:"CERFMP1"
+
+[HKEY_LOCAL_MACHINE\Comm\Tcpip6\Linkage]
+"Bind"=multi_sz:"CERFMP1"
