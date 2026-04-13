@@ -48,3 +48,14 @@ REGEDIT4
 
 [HKEY_LOCAL_MACHINE\Comm\Tcpip6\Linkage]
 "Bind"=multi_sz:"CERFMP1"
+
+; ---------------------------------------------------------------
+; CERFMP1 adapter Parms key. ndis.dll's ndisInitializeConfiguration
+; (called from ndisPnPStartDevice before our OnInitialize) opens
+; HKLM\Comm\<MiniportName>\Parms — if the key doesn't exist the open
+; fails and ndis.dll bails before calling InitializeHandler. No
+; values needed here; all the NdisReadConfiguration calls that
+; follow are tolerated-if-missing.
+; ---------------------------------------------------------------
+
+[HKEY_LOCAL_MACHINE\Comm\CERFMP1\Parms]
