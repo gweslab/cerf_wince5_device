@@ -9,16 +9,15 @@ REGEDIT4
 ; ---------------------------------------------------------------
 ; Neutralize baked-in NDIS miniport entries.
 ;
-; ndis.dll's NDS_Init calls CeDeviceEnumerateFromRegistry(L"Comm",
-; L"NDIS", ...) at boot. It walks HKLM\Comm\* and, for any subkey with
-; Group="NDIS", calls LoadDriver(ImagePath). Several of the ROM-baked
-; drivers (ne2000.dll in particular) ARE present in the VFS, so the
-; load would succeed and the driver would then try to probe ISA/PCI
-; hardware that doesn't exist — hang/crash risk.
+; ndis.dll's NDS_Init walks HKLM\Comm\* at boot and, for any subkey
+; with Group="NDIS", calls CeDriverLoad(ImagePath). Several of the
+; ROM-baked drivers (ne2000.dll in particular) ARE present in the VFS,
+; so the load would succeed and the driver would then try to probe
+; ISA/PCI hardware that doesn't exist — hang/crash risk.
 ;
-; Our NdisMiniportService registers CERFMP1 directly from native code
-; after ndis.dll's Init returns; no need for any of these registry
-; entries. Delete them recursively (including Parms/Linkage children).
+; We register our synthetic CERFMP driver below; no need for any of
+; the ROM-baked miniports. Delete them recursively (including Parms
+; and Linkage children).
 ; ---------------------------------------------------------------
 
 [-HKEY_LOCAL_MACHINE\Comm\USB8023]
@@ -36,11 +35,58 @@ REGEDIT4
 [-HKEY_LOCAL_MACHINE\Comm\AsyncMac1]
 
 ; ---------------------------------------------------------------
+; CERFMP synthetic NDIS miniport driver registration.
+;
+; cerfmp.dll is NOT a real ARM PE — it's a fully synthetic driver
+; backed by CERF's C++ thunks (see cerf/coredll/win32_thunks_util.cpp
+; `thunked_dlls[]` and cerf/net/cerfmp_thunks.cpp). When ndis.dll's
+; NDS_Init adapter enumerator (CeDeviceEnumerateFromRegistry) walks
+; HKLM\Comm\*, it finds CERFMP, reads ImagePath=cerfmp.dll, and inside
+; CeDriverLoad calls LoadLibraryW("cerfmp.dll") — which returns our
+; fake handle — then GetProcAddressW(h, "DriverEntry") — which returns
+; a CERF-minted thunk that dispatches NdisMiniportService::OnDriverEntry.
+; That runs NdisInitializeWrapper + NdisMRegisterMiniport, and ndis.dll
+; then calls ndisAddDevice on our driver object internally. No reached-in
+; RVA arithmetic into ndis.dll private functions; the whole registration
+; path uses public exported entry points only.
+;
+; The Linkage\Route multi_sz names the adapter INSTANCES ndis.dll should
+; create for this driver. CERFMP1 is the single instance; its Parms
+; subkey is opened by ndisInitializeConfiguration before OnInitialize.
+; ---------------------------------------------------------------
+
+[HKEY_LOCAL_MACHINE\Comm\CERFMP]
+"Group"="NDIS"
+"ImagePath"="cerfmp.dll"
+"DisplayName"="CERF Virtual Miniport"
+
+[HKEY_LOCAL_MACHINE\Comm\CERFMP\Linkage]
+"Route"=multi_sz:"CERFMP1"
+
+[HKEY_LOCAL_MACHINE\Comm\CERFMP1]
+"Group"="NDIS"
+"ImagePath"="cerfmp.dll"
+"DisplayName"="CERF Virtual Adapter"
+
+; BusType + BusNumber are MANDATORY in <Adapter>\Parms for ndis.dll's
+; CeDeviceEnumerateFromRegistry path. ndis.dll's adapter dispatcher
+; (sub_2D5ABE8 in IDA) reads both via RegQueryValueExW; if either is
+; absent the sub_2D5AD8C caller bails before reaching CeDriverLoad,
+; the LoadLibrary("cerfmp.dll") never fires, and our DriverEntry thunk
+; never runs — the adapter silently fails to register. BusType=0 is
+; NdisInterfaceInternal (matches VMINI's pattern in the ROM .reg files,
+; which is the closest analog for a virtual non-bus adapter). BusNumber=0
+; identifies us as bus instance 0.
+[HKEY_LOCAL_MACHINE\Comm\CERFMP1\Parms]
+"BusType"=dword:0
+"BusNumber"=dword:0
+
+; ---------------------------------------------------------------
 ; Protocol linkage: bind Tcpip / Tcpip6 to CERFMP1.
 ;
 ; NDIS walks Linkage\Bind when tcpstk calls NdisRegisterProtocol to
 ; decide which registered miniports each protocol should bind to. Our
-; adapter's instance name is CERFMP1 (set by NdisMiniportService).
+; adapter's instance name is CERFMP1 (registered above).
 ; ---------------------------------------------------------------
 
 [HKEY_LOCAL_MACHINE\Comm\Tcpip\Linkage]
@@ -48,14 +94,3 @@ REGEDIT4
 
 [HKEY_LOCAL_MACHINE\Comm\Tcpip6\Linkage]
 "Bind"=multi_sz:"CERFMP1"
-
-; ---------------------------------------------------------------
-; CERFMP1 adapter Parms key. ndis.dll's ndisInitializeConfiguration
-; (called from ndisPnPStartDevice before our OnInitialize) opens
-; HKLM\Comm\<MiniportName>\Parms — if the key doesn't exist the open
-; fails and ndis.dll bails before calling InitializeHandler. No
-; values needed here; all the NdisReadConfiguration calls that
-; follow are tolerated-if-missing.
-; ---------------------------------------------------------------
-
-[HKEY_LOCAL_MACHINE\Comm\CERFMP1\Parms]
